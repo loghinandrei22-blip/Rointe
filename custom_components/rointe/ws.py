@@ -159,9 +159,13 @@ class RointeWebSocket:
             
             devices = entry_data["devices"]
             zone_ids = set(d.get("zone_id") for d in devices if d.get("zone_id"))
-            
-            # GET zones and wait for responses
-            for zone_id in zone_ids:
+
+            # GET zones and devices concurrently - sequential awaits here used to
+            # take (zones + devices) * up to 5s each, which with a dozen-plus
+            # devices/zones could exceed HA's setup timeout and get the whole
+            # entry setup cancelled mid-loop (a single unresponsive/orphaned
+            # zone or device no longer blocks everything behind it).
+            async def _get_zone(zone_id):
                 msg = {
                     "t": "d",
                     "d": {"r": self._next_rid(), "a": "g", "b": {"p": f"/zones/{zone_id}/data", "q": {}}},
@@ -169,13 +173,11 @@ class RointeWebSocket:
                 response = await self._send_and_wait(msg)
                 if response:
                     _LOGGER.debug("Got zone data for %s", zone_id)
-            
-            # GET devices and wait for responses
-            for device in devices:
+
+            async def _get_device(device):
                 serial = device.get("serialNumber")
                 if not serial:
-                    continue
-                
+                    return
                 msg = {
                     "t": "d",
                     "d": {"r": self._next_rid(), "a": "g", "b": {"p": f"/devices/{serial}", "q": {}}},
@@ -186,6 +188,9 @@ class RointeWebSocket:
                     device_data = response.get("b", {}).get("d", {})
                     if isinstance(device_data, dict) and isinstance(device_data.get("data"), dict):
                         self._device_full_state[serial] = dict(device_data["data"])
+
+            await asyncio.gather(*(_get_zone(z) for z in zone_ids), return_exceptions=True)
+            await asyncio.gather(*(_get_device(d) for d in devices), return_exceptions=True)
             
             # Now subscribe
             for zone_id in zone_ids:

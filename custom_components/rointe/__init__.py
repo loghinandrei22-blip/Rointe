@@ -64,12 +64,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         ws = None
     else:
         ws = RointeWebSocket(hass, auth, user_id=user_id)
-        try:
-            await ws.connect()
-            _LOGGER.info("WebSocket connection established for user %s", user_id)
-        except Exception as e:
-            _LOGGER.error("Failed to establish WebSocket: %s", e)
-            ws = None
 
     # Initialize API
     api = RointeAPI(auth)
@@ -89,10 +83,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         "ws": ws,
     }
 
-    # Now reconnect WebSocket so it can subscribe to the discovered devices
-    _LOGGER.info("Reconnecting WebSocket with discovered devices")
-    await ws.disconnect()
-    await ws.connect()
+    # Connect the WebSocket now that devices are known, so
+    # _subscribe_to_devices() can subscribe to them on the first try.
+    if ws:
+        try:
+            await ws.connect()
+            _LOGGER.info("WebSocket connection established for user %s", user_id)
+        except Exception as e:
+            _LOGGER.error("Failed to establish WebSocket: %s", e)
 
     # Forward setups to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
