@@ -35,6 +35,7 @@ class RointeWebSocket:
         self._rid = 100  # request counter
         self._keepalive_task = None
         self._pending_requests = {}  # Track pending requests
+        self._device_full_state = {}  # serial -> full last-known device data dict
 
     def _next_rid(self):
         """Get next request ID."""
@@ -149,6 +150,9 @@ class RointeWebSocket:
                 response = await self._send_and_wait(msg)
                 if response:
                     _LOGGER.debug("Got device data for %s", serial)
+                    device_data = response.get("b", {}).get("d", {})
+                    if isinstance(device_data, dict) and isinstance(device_data.get("data"), dict):
+                        self._device_full_state[serial] = dict(device_data["data"])
             
             # Now subscribe
             for zone_id in zone_ids:
@@ -274,11 +278,13 @@ class RointeWebSocket:
                     # Handle full device snapshot (a: "d")
                     if "data" in updates and isinstance(updates["data"], dict):
                         device_data = updates["data"]
+                        self._device_full_state[serial] = dict(device_data)
                         async_dispatcher_send(self.hass, f"{SIGNAL_UPDATE}_{device_uuid}", device_data)
                         _LOGGER.debug("Full device update for %s (serial: %s)", device_uuid, serial)
-                    
+
                     # Handle incremental updates (a: "m") to /data path
                     elif "/data" in path:
+                        self._device_full_state.setdefault(serial, {}).update(updates)
                         async_dispatcher_send(self.hass, f"{SIGNAL_UPDATE}_{device_uuid}", updates)
                         _LOGGER.debug("Incremental update for %s (serial: %s): %s", device_uuid, serial, updates)
                 
@@ -290,10 +296,13 @@ class RointeWebSocket:
     async def send(self, zone_id: str, device_id: str, updates: dict) -> bool:
         """Send updates via the persistent WebSocket connection.
 
-        Rointe controls devices at the zone level - writes go to
-        /zones/{zone_id}/data, not /devices/{serial}/data (confirmed by
-        capturing the official web app's WebSocket traffic; direct device
-        writes are rejected by the backend with permission_denied).
+        Rointe's backend rejects partial writes to /devices/{serial}/data
+        (observed as permission_denied) - the official app always sends the
+        complete current device object with just the relevant field(s)
+        changed, confirmed by capturing its WebSocket traffic. We keep a
+        cache of each device's full last-known state and merge requested
+        changes into a copy of it before sending, targeting the device path
+        (zone_id is accepted for API compatibility but unused).
 
         Returns True only if Rointe's backend acknowledged the write.
         """
@@ -301,40 +310,72 @@ class RointeWebSocket:
             _LOGGER.error("WebSocket not connected, cannot send update")
             return False
 
-        if not zone_id:
-            _LOGGER.error("Device %s has no zone_id", device_id)
+        device_serial = None
+        rointe_data = self.hass.data.get("rointe", {})
+        for entry_id, entry_data in rointe_data.items():
+            if isinstance(entry_data, dict) and "devices" in entry_data:
+                for device in entry_data["devices"]:
+                    if device.get("id") == device_id:
+                        device_serial = device.get("serialNumber")
+                        break
+            if device_serial:
+                break
+
+        if not device_serial:
+            _LOGGER.error("Device %s has no serial number", device_id)
             return False
 
         try:
-            zone_frame = {
+            base_state = self._device_full_state.get(device_serial)
+            if base_state is None:
+                get_msg = {
+                    "t": "d",
+                    "d": {"r": self._next_rid(), "a": "g", "b": {"p": f"/devices/{device_serial}", "q": {}}},
+                }
+                get_response = await self._send_and_wait(get_msg)
+                device_data = (get_response or {}).get("b", {}).get("d", {})
+                if isinstance(device_data, dict) and isinstance(device_data.get("data"), dict):
+                    base_state = dict(device_data["data"])
+                    self._device_full_state[device_serial] = base_state
+
+            if base_state is None:
+                _LOGGER.error("No known state for device %s (serial %s), cannot send update",
+                             device_id, device_serial)
+                return False
+
+            full_update = {**base_state, **updates}
+            full_update["last_sync_datetime_device"] = int(datetime.now().timestamp() * 1000)
+
+            device_frame = {
                 "t": "d",
                 "d": {
                     "r": self._next_rid(),
                     "b": {
-                        "p": f"/zones/{zone_id}/data",
-                        "d": updates
+                        "p": f"/devices/{device_serial}/data",
+                        "d": full_update
                     },
                     "a": "m"
                 }
             }
 
-            _LOGGER.debug("Sending update (r:%d, fields=%d) to zone %s: %s",
-                          zone_frame["d"]["r"], len(updates), zone_id, updates)
+            _LOGGER.debug("Sending update (r:%d, changed fields=%d) to device %s",
+                          device_frame["d"]["r"], len(updates), device_serial)
 
-            response = await self._send_and_wait(zone_frame)
+            response = await self._send_and_wait(device_frame)
 
             if response is None:
-                _LOGGER.error("No acknowledgment for update (r:%d) to zone %s - treating as failed",
-                             zone_frame["d"]["r"], zone_id)
+                _LOGGER.error("No acknowledgment for update (r:%d) to device %s - treating as failed",
+                             device_frame["d"]["r"], device_serial)
                 return False
 
             status = response.get("b", {}).get("s")
             if status not in (None, "ok"):
-                _LOGGER.error("Update (r:%d) to zone %s rejected by backend: %s",
-                             zone_frame["d"]["r"], zone_id, response)
+                _LOGGER.error("Update (r:%d) to device %s rejected by backend: %s",
+                             device_frame["d"]["r"], device_serial, response)
                 return False
 
-            _LOGGER.info("Update (r:%d) to zone %s acknowledged", zone_frame["d"]["r"], zone_id)
+            self._device_full_state[device_serial] = full_update
+            _LOGGER.info("Update (r:%d) to device %s acknowledged", device_frame["d"]["r"], device_serial)
             return True
 
         except Exception as e:
