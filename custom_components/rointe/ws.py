@@ -34,6 +34,7 @@ class RointeWebSocket:
         self.reconnect_task = None
         self._rid = 100  # request counter
         self._keepalive_task = None
+        self._reauth_task = None
         self._pending_requests = {}  # Track pending requests
         self._device_full_state = {}  # serial -> full last-known device data dict
 
@@ -66,8 +67,9 @@ class RointeWebSocket:
             await self._handshake_and_auth()
             await self._subscribe_to_devices()
 
-            # Start keep-alive and message listener
+            # Start keep-alive, re-auth, and message listener
             self._keepalive_task = asyncio.create_task(self._send_keepalive())
+            self._reauth_task = asyncio.create_task(self._periodic_reauth())
             asyncio.create_task(self._listen())
         except Exception as e:
             _LOGGER.error("WebSocket connection failed: %s", e)
@@ -92,6 +94,31 @@ class RointeWebSocket:
             
         except Exception as e:
             _LOGGER.error("Failed during handshake/auth: %s", e)
+
+    async def _periodic_reauth(self):
+        """Refresh the Firebase auth credential before the ~1h ID token expires.
+
+        Firebase doesn't drop the socket when the token expires - it just
+        stops delivering pushes and acks (observed as "expired_token" with no
+        disconnect), so a reconnect-triggered reauth alone isn't enough.
+        """
+        try:
+            while self.running and self.ws and not self.ws.closed:
+                await asyncio.sleep(1200)  # 20 min - well inside the ~1h token lifetime
+                if self.ws and not self.ws.closed:
+                    await self._reauth()
+        except Exception as e:
+            _LOGGER.error("Periodic re-auth error: %s", e)
+
+    async def _reauth(self):
+        """Re-send a fresh Firebase auth credential on the current connection."""
+        try:
+            id_token = await self.auth.async_firebase_token()
+            auth_msg = {"t": "d", "d": {"r": self._next_rid(), "a": "auth", "b": {"cred": id_token}}}
+            await self.ws.send_str(json.dumps(auth_msg))
+            _LOGGER.info("Re-sent Firebase auth (r:%d)", auth_msg["d"]["r"])
+        except Exception as e:
+            _LOGGER.error("Failed to re-authenticate: %s", e)
 
     async def _send_and_wait(self, msg, timeout=5.0):
         """Send a message and wait for response."""
@@ -230,7 +257,14 @@ class RointeWebSocket:
             if "b" not in body:
                 return
             b = body["b"]
-            
+
+            # Firebase notifies expiry instead of dropping the connection -
+            # reauth immediately rather than waiting for the periodic refresh
+            if body.get("a") == "ac" and b.get("s") == "expired_token":
+                _LOGGER.warning("Firebase auth token expired, re-authenticating")
+                asyncio.create_task(self._reauth())
+                return
+
             # Handle data updates
             if "p" in b and "d" in b and b.get("a") in ("d", "m"):
                 path = b["p"]
@@ -388,15 +422,18 @@ class RointeWebSocket:
         """Handle unexpected disconnection."""
         _LOGGER.warning("WebSocket disconnected")
         
-        # Cancel keep-alive task
+        # Cancel keep-alive and re-auth tasks
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             self._keepalive_task = None
-        
+        if self._reauth_task and not self._reauth_task.done():
+            self._reauth_task.cancel()
+            self._reauth_task = None
+
         if self.ws:
             await self.ws.close()
             self.ws = None
-        
+
         if self.running:
             await self._schedule_reconnect()
 
@@ -405,11 +442,14 @@ class RointeWebSocket:
         _LOGGER.info("Disconnecting WebSocket")
         self.running = False
         
-        # Cancel keep-alive task
+        # Cancel keep-alive and re-auth tasks
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             self._keepalive_task = None
-        
+        if self._reauth_task and not self._reauth_task.done():
+            self._reauth_task.cancel()
+            self._reauth_task = None
+
         if self.ws and not self.ws.closed:
             await self.ws.close()
         if self.session and not self.session.closed:
