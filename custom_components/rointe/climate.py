@@ -323,12 +323,7 @@ class RointeHeater(ClimateEntity):
 
             _LOGGER.debug("Setting preset %s for device %s: %s", preset_mode, self.device_id, updates)
 
-            # Command dispatch goes through the REST control endpoint, not the
-            # Firebase WebSocket write - ws.send() only updates the database
-            # mirror (Firebase acks it and the website reflects it), it never
-            # reaches the physical unit. Confirmed by comparing a WS-only write
-            # against the real web app's Manual-mode toggle on the same device.
-            acknowledged = await self.api.set_device_state(self.device_id, updates)
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the preset change")
 
@@ -367,9 +362,7 @@ class RointeHeater(ClimateEntity):
 
             _LOGGER.debug("Setting HVAC mode %s for device %s: %s", hvac_mode, self.device_id, updates)
 
-            # See async_set_preset_mode - command dispatch goes through the
-            # REST control endpoint, not the Firebase WebSocket write.
-            acknowledged = await self.api.set_device_state(self.device_id, updates)
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the HVAC mode change")
 
@@ -407,9 +400,7 @@ class RointeHeater(ClimateEntity):
 
             _LOGGER.debug("Setting temperature %s for device %s", temperature, self.device_id)
 
-            # See async_set_preset_mode - command dispatch goes through the
-            # REST control endpoint, not the Firebase WebSocket write.
-            acknowledged = await self.api.set_device_state(self.device_id, updates)
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the temperature change")
 

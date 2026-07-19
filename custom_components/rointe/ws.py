@@ -405,6 +405,8 @@ class RointeWebSocket:
 
             _LOGGER.debug("Sending update (r:%d, changed fields=%d) to device %s",
                           device_frame["d"]["r"], len(updates), device_serial)
+            _LOGGER.warning("DIAG full_update keys (%d) for %s: %s",
+                          len(full_update), device_serial, sorted(full_update.keys()))
 
             response = await self._send_and_wait(device_frame)
 
