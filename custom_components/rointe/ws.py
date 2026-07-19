@@ -111,9 +111,15 @@ class RointeWebSocket:
             _LOGGER.error("Periodic re-auth error: %s", e)
 
     async def _reauth(self):
-        """Re-send a fresh Firebase auth credential on the current connection."""
+        """Force a fresh Firebase token and send it on the current connection.
+
+        Must force a real refresh here rather than the lazily-refreshing
+        async_firebase_token() - that one only fetches a new token within 5
+        minutes of expiry, so most periodic ticks would just resend the same
+        already-issued token and never actually extend the session.
+        """
         try:
-            id_token = await self.auth.async_firebase_token()
+            id_token = await self.auth.async_refresh_firebase_token()
             auth_msg = {"t": "d", "d": {"r": self._next_rid(), "a": "auth", "b": {"cred": id_token}}}
             await self.ws.send_str(json.dumps(auth_msg))
             _LOGGER.info("Re-sent Firebase auth (r:%d)", auth_msg["d"]["r"])

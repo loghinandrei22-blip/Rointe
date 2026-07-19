@@ -180,3 +180,8 @@ class RointeAuth:
         if not self._firebase_id_token or not self._firebase_token_expiry or datetime.now() + TOKEN_EXPIRY_BUFFER >= self._firebase_token_expiry:
             await self.async_login_firebase()
         return self._firebase_id_token
+
+    async def async_refresh_firebase_token(self) -> str:
+        """Force a new Firebase token regardless of the cached one's remaining lifetime."""
+        await self.async_login_firebase()
+        return self._firebase_id_token
