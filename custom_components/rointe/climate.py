@@ -316,7 +316,11 @@ class RointeHeater(ClimateEntity):
         try:
             rointe_mode = PRESET_TO_ROINTE[preset_mode]
             updates = ROINTE_MODES[rointe_mode].copy()
-            
+            # mode:0 forces Manual override - without it, a device left in Auto
+            # (schedule) mode keeps following its weekly program and silently
+            # ignores this write even though Firebase acknowledges it.
+            updates["mode"] = 0
+
             _LOGGER.debug("Setting preset %s for device %s: %s", preset_mode, self.device_id, updates)
 
             acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
@@ -351,6 +355,11 @@ class RointeHeater(ClimateEntity):
                     "temp": 7
                 }
 
+            # mode:0 forces Manual override - without it, a device left in Auto
+            # (schedule) mode keeps following its weekly program and silently
+            # ignores this write even though Firebase acknowledges it.
+            updates["mode"] = 0
+
             _LOGGER.debug("Setting HVAC mode %s for device %s: %s", hvac_mode, self.device_id, updates)
 
             acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
@@ -379,12 +388,16 @@ class RointeHeater(ClimateEntity):
                 temperature = min(self.max_temp, temperature)
                 temperature = max(self.min_temp, temperature)
             
-            # Send temperature change - device will handle mode switching
+            # Send temperature change - device will handle mode switching.
+            # mode:0 forces Manual override - without it, a device left in Auto
+            # (schedule) mode keeps following its weekly program and silently
+            # ignores this write even though Firebase acknowledges it.
             updates = {
                 "temp": int(temperature),
-                "power": 2
+                "power": 2,
+                "mode": 0
             }
-            
+
             _LOGGER.debug("Setting temperature %s for device %s", temperature, self.device_id)
 
             acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
