@@ -179,16 +179,6 @@ class RointeAPI:
                                         continue
                                     
                                     device_name = device.get("name", device_id)
-                                    serial_raw = device.get("serialNumber")
-                                    serial = serial_raw
-                                    if serial_raw and len(serial_raw) % 2 == 0:
-                                        half = len(serial_raw) // 2
-                                        if serial_raw[:half] == serial_raw[half:]:
-                                            _LOGGER.warning(
-                                                "Device %s serialNumber %s looks duplicated, using %s",
-                                                device_id, serial_raw, serial_raw[:half]
-                                            )
-                                            serial = serial_raw[:half]
                                     device_info = {
                                         "id": device_id,
                                         "name": device_name,
@@ -198,7 +188,7 @@ class RointeAPI:
                                         "power": device.get("power"),
                                         "version": device.get("version"),
                                         "type": device.get("type"),
-                                        "serialNumber": serial,
+                                        "serialNumber": device.get("serialNumber"),
                                         "mac": device.get("mac"),
                                         "deviceStatus": device.get("deviceStatus"),
                                         # Energy consumption data
