@@ -319,7 +319,7 @@ class RointeHeater(ClimateEntity):
             
             _LOGGER.debug("Setting preset %s for device %s: %s", preset_mode, self.device_id, updates)
 
-            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            acknowledged = await self.api.set_device_state(self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the preset change")
 
@@ -353,7 +353,7 @@ class RointeHeater(ClimateEntity):
 
             _LOGGER.debug("Setting HVAC mode %s for device %s: %s", hvac_mode, self.device_id, updates)
 
-            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            acknowledged = await self.api.set_device_state(self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the HVAC mode change")
 
@@ -387,7 +387,7 @@ class RointeHeater(ClimateEntity):
             
             _LOGGER.debug("Setting temperature %s for device %s", temperature, self.device_id)
 
-            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            acknowledged = await self.api.set_device_state(self.device_id, updates)
             if not acknowledged:
                 raise RointeDeviceError("Device did not acknowledge the temperature change")
 
