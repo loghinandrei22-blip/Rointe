@@ -287,16 +287,19 @@ class RointeWebSocket:
 
     # -------------------- COMMAND SEND --------------------
 
-    async def send(self, zone_id: str, device_id: str, updates: dict):
-        """Send updates via the persistent WebSocket connection."""
+    async def send(self, zone_id: str, device_id: str, updates: dict) -> bool:
+        """Send updates via the persistent WebSocket connection.
+
+        Returns True only if Rointe's backend acknowledged the write.
+        """
         if not self.ws or self.ws.closed:
             _LOGGER.error("WebSocket not connected, cannot send update")
-            return
-        
+            return False
+
         try:
             # IMPORTANT: Don't merge with device_state from hass.data!
             # That contains REST API metadata, not Firebase device fields
-            
+
             # Get serial number only
             device_serial = None
             rointe_data = self.hass.data.get("rointe", {})
@@ -308,14 +311,14 @@ class RointeWebSocket:
                             break
                 if device_serial:
                     break
-            
+
             if not device_serial:
                 _LOGGER.error("Device %s has no serial number", device_id)
-                return
-            
+                return False
+
             # Add timestamp to updates
             updates["last_sync_datetime_device"] = int(datetime.now().timestamp() * 1000)
-            
+
             # Send ONLY the updates - don't merge with full state!
             device_frame = {
                 "t": "d",
@@ -328,16 +331,29 @@ class RointeWebSocket:
                     "a": "m"
                 }
             }
-            
-            json_payload = json.dumps(device_frame)
-            _LOGGER.warning("SENDING: r=%d, fields=%d, JSON: %s", 
-                           device_frame["d"]["r"], len(updates), json_payload)
-            
-            await self.ws.send_str(json_payload)
-            _LOGGER.info("Sent update (r:%d) to %s", device_frame["d"]["r"], device_id)
-        
+
+            _LOGGER.debug("Sending update (r:%d, fields=%d) to %s: %s",
+                          device_frame["d"]["r"], len(updates), device_id, updates)
+
+            response = await self._send_and_wait(device_frame)
+
+            if response is None:
+                _LOGGER.error("No acknowledgment for update (r:%d) to %s - treating as failed",
+                             device_frame["d"]["r"], device_id)
+                return False
+
+            status = response.get("b", {}).get("s")
+            if status not in (None, "ok"):
+                _LOGGER.error("Update (r:%d) to %s rejected by backend: %s",
+                             device_frame["d"]["r"], device_id, response)
+                return False
+
+            _LOGGER.info("Update (r:%d) to %s acknowledged", device_frame["d"]["r"], device_id)
+            return True
+
         except Exception as e:
             _LOGGER.error("Error sending update: %s", e, exc_info=True)
+            return False
 
     # -------------------- DISCONNECTION --------------------
 

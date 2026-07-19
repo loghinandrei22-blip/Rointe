@@ -318,9 +318,11 @@ class RointeHeater(ClimateEntity):
             updates = ROINTE_MODES[rointe_mode].copy()
             
             _LOGGER.debug("Setting preset %s for device %s: %s", preset_mode, self.device_id, updates)
-            
-            await self.ws.send(self._zone_id, self.device_id, updates)
-            
+
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            if not acknowledged:
+                raise RointeDeviceError("Device did not acknowledge the preset change")
+
             self._preset_mode = preset_mode
             self._hvac_mode = HVACMode.HEAT
             self.async_write_ha_state()
@@ -351,7 +353,9 @@ class RointeHeater(ClimateEntity):
 
             _LOGGER.debug("Setting HVAC mode %s for device %s: %s", hvac_mode, self.device_id, updates)
 
-            await self.ws.send(self._zone_id, self.device_id, updates)
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            if not acknowledged:
+                raise RointeDeviceError("Device did not acknowledge the HVAC mode change")
 
             self._hvac_mode = hvac_mode
             self.async_write_ha_state()
@@ -382,9 +386,11 @@ class RointeHeater(ClimateEntity):
             }
             
             _LOGGER.debug("Setting temperature %s for device %s", temperature, self.device_id)
-            
-            await self.ws.send(self._zone_id, self.device_id, updates)
-            
+
+            acknowledged = await self.ws.send(self._zone_id, self.device_id, updates)
+            if not acknowledged:
+                raise RointeDeviceError("Device did not acknowledge the temperature change")
+
             self._target_temp = temperature
             self._hvac_mode = HVACMode.HEAT
             self.async_write_ha_state()
